@@ -6,11 +6,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 class Settings(BaseSettings):
     telegram_bot_token: str
-    github_token: str = ""
-    github_models_endpoint: str = "https://models.github.ai/inference"
-    github_models_api_version: str = "2026-03-10"
-    github_chat_models: str = "openai/gpt-4.1-mini,openai/gpt-4o-mini"
-    github_vision_models: str = "openai/gpt-4.1-mini,openai/gpt-4o-mini"
+    
     aitunnel_api_key: str = ""
     aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
     aitunnel_image_model: str = "gpt-image-1-mini"
