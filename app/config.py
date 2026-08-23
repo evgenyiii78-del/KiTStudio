@@ -14,6 +14,26 @@ def _env(name: str, default: str = "") -> str:
     return value.strip() if isinstance(value, str) else default
 
 
+def _clean_token(value: str) -> str:
+    """Normalize a Telegram token accidentally pasted with quotes or `bot` prefix."""
+    token = (value or "").strip().strip('"').strip("'").strip()
+    if token.lower().startswith("bot") and ":" in token:
+        token = token[3:].strip()
+    return token
+
+
+def telegram_token_candidates() -> list[tuple[str, str]]:
+    """Return unique Telegram token candidates in Bothost-friendly priority order."""
+    result: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for source in ("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
+        token = _clean_token(_env(source))
+        if token and token not in seen:
+            result.append((source, token))
+            seen.add(token)
+    return result
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(_env(name, str(default)))
@@ -23,7 +43,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    telegram_bot_token: str = _env("TELEGRAM_BOT_TOKEN") or _env("BOT_TOKEN")
+    # Bothost commonly exposes BOT_TOKEN. TELEGRAM_BOT_TOKEN remains a fallback.
+    telegram_bot_token: str = _clean_token(_env("BOT_TOKEN")) or _clean_token(_env("TELEGRAM_BOT_TOKEN"))
     aitunnel_api_key: str = _env("AITUNNEL_API_KEY")
     aitunnel_base_url: str = _env("AITUNNEL_BASE_URL", "https://api.aitunnel.ru/v1").rstrip("/")
 
@@ -34,7 +55,7 @@ class Settings:
     image_quality: str = _env("AITUNNEL_IMAGE_QUALITY", "auto")
     image_output_format: str = _env("AITUNNEL_IMAGE_FORMAT", "png")
 
-    database_path: str = _env("DATABASE_PATH", "data/cakehub.sqlite3")
+    database_path: str = _env("DATABASE_PATH", "/app/data/cakehub.sqlite3")
     history_limit: int = _env_int("HISTORY_LIMIT", 16)
     max_output_tokens: int = _env_int("MAX_OUTPUT_TOKENS", 2500)
     ai_timeout_seconds: int = _env_int("AI_TIMEOUT_SECONDS", 180)
@@ -43,8 +64,8 @@ class Settings:
 
     def validate(self) -> None:
         missing: list[str] = []
-        if not self.telegram_bot_token:
-            missing.append("TELEGRAM_BOT_TOKEN")
+        if not telegram_token_candidates():
+            missing.append("BOT_TOKEN/TELEGRAM_BOT_TOKEN")
         if not self.aitunnel_api_key:
             missing.append("AITUNNEL_API_KEY")
         if missing:
