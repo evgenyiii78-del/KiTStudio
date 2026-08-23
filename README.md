@@ -1,4 +1,4 @@
-# CakeHub AI Bot 3.4
+# CakeHub AI Bot 3.4.1
 
 Telegram AI-бот на **aiogram 3**. Все AI-функции работают через **AITunnel**.
 Версия подготовлена для обычного Python-хостинга и **Bothost**; Railway-конфигурации в проекте нет.
@@ -71,7 +71,7 @@ python main.py
    - `TELEGRAM_BOT_TOKEN`
    - `AITUNNEL_API_KEY`
 6. Оставьте `DATABASE_PATH=data/cakehub.sqlite3` — при рабочем каталоге `/app` база будет храниться в `/app/data`.
-7. Запустите/перезапустите бота и проверьте лог `CakeHub AI Bot 3.4 started as ...`.
+7. Запустите/перезапустите бота и проверьте лог `CakeHub AI Bot 3.4.1 started as ...`.
 
 `requirements.txt` лежит в корне, поэтому зависимости устанавливаются платформой при сборке.
 
@@ -83,7 +83,7 @@ python main.py
 AITUNNEL_BASE_URL=https://api.aitunnel.ru/v1
 AITUNNEL_CHAT_MODEL=auto
 AITUNNEL_VISION_MODEL=auto
-AITUNNEL_IMAGE_MODEL=gpt-image-1
+AITUNNEL_IMAGE_MODEL=gpt-image-2
 ```
 
 Если модель изображения недоступна на вашем тарифе, поменяйте `AITUNNEL_IMAGE_MODEL` на ID доступной модели AITunnel.
@@ -116,3 +116,9 @@ SMOKE TEST: PASS
 ## Безопасность
 
 Не добавляйте `.env` в Git. В репозитории должен находиться только `.env.example` без настоящих токенов.
+
+
+## 3.4.1
+
+- Для генерации изображений используется `gpt-image-2` вместо виртуального `auto`.
+- Если AITunnel вернёт 403 со списком разрешённых image-моделей, бот автоматически повторит запрос с разрешённой моделью.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -113,17 +114,63 @@ class AIService:
             logger.error("Unexpected vision response: %r", data)
             raise AIServiceError("Не удалось разобрать ответ анализа изображения.") from exc
 
+    @staticmethod
+    def _preferred_image_model(configured_model: str) -> str:
+        # AITunnel does not guarantee that the virtual model `auto` is enabled
+        # for image-generation API keys. Use a real image model by default.
+        model = (configured_model or "").strip()
+        if not model or model.lower() == "auto":
+            return "gpt-image-2"
+        return model
+
+    @staticmethod
+    def _allowed_models_from_error(message: str) -> list[str]:
+        # Typical AITunnel 403 text:
+        # "... Разрешённые: gemini-3.1-flash-lite-image, gpt-image-2."
+        match = re.search(r"Разреш[её]нные\s*:\s*([^\n]+)", message, flags=re.IGNORECASE)
+        if not match:
+            return []
+        raw = match.group(1).strip().rstrip(".")
+        result: list[str] = []
+        for item in raw.split(","):
+            model = item.strip().strip("`'\"")
+            if model and re.fullmatch(r"[A-Za-z0-9._/-]+", model):
+                result.append(model)
+        return result
+
     async def generate_image(self, prompt: str) -> tuple[bytes, str, float | None]:
+        model = self._preferred_image_model(self.settings.image_model)
         payload: dict[str, Any] = {
-            "model": self.settings.image_model,
+            "model": model,
             "prompt": prompt,
             "n": 1,
             "size": self.settings.image_size,
             "quality": self.settings.image_quality,
             "output_format": self.settings.image_output_format,
         }
+
         async with self._image_sem:
-            data = await self._post_json("/images/generations", payload)
+            try:
+                data = await self._post_json("/images/generations", payload)
+            except AIServiceError as exc:
+                allowed = self._allowed_models_from_error(str(exc))
+                if not allowed:
+                    raise
+
+                # Prefer GPT Image 2 when the current key permits it; otherwise
+                # use the first image model explicitly returned by AITunnel.
+                fallback = "gpt-image-2" if "gpt-image-2" in allowed else allowed[0]
+                if fallback == model:
+                    raise
+
+                logger.warning(
+                    "AITunnel rejected image model %s; retrying with permitted model %s",
+                    model,
+                    fallback,
+                )
+                payload["model"] = fallback
+                data = await self._post_json("/images/generations", payload)
+
         try:
             item = data["data"][0]
             raw = base64.b64decode(item["b64_json"])

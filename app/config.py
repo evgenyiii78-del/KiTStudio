@@ -50,7 +50,7 @@ class Settings:
 
     chat_model: str = _env("AITUNNEL_CHAT_MODEL", "auto")
     vision_model: str = _env("AITUNNEL_VISION_MODEL", "auto")
-    image_model: str = _env("AITUNNEL_IMAGE_MODEL", "gpt-image-1")
+    image_model: str = (_env("AITUNNEL_IMAGE_MODEL", "gpt-image-2") or "gpt-image-2")
     image_size: str = _env("AITUNNEL_IMAGE_SIZE", "1024x1024")
     image_quality: str = _env("AITUNNEL_IMAGE_QUALITY", "auto")
     image_output_format: str = _env("AITUNNEL_IMAGE_FORMAT", "png")
