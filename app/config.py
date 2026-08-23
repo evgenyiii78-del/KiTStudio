@@ -41,6 +41,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _image_model() -> str:
+    """Return a concrete AITunnel image model; image generation must never use `auto`."""
+    model = _env("AITUNNEL_IMAGE_MODEL", "gpt-image-2").strip()
+    if not model or model.lower() == "auto":
+        return "gpt-image-2"
+    return model
+
+
 @dataclass(frozen=True)
 class Settings:
     # Bothost commonly exposes BOT_TOKEN. TELEGRAM_BOT_TOKEN remains a fallback.
@@ -50,7 +58,7 @@ class Settings:
 
     chat_model: str = _env("AITUNNEL_CHAT_MODEL", "auto")
     vision_model: str = _env("AITUNNEL_VISION_MODEL", "auto")
-    image_model: str = (_env("AITUNNEL_IMAGE_MODEL", "gpt-image-2") or "gpt-image-2")
+    image_model: str = _image_model()
     image_size: str = _env("AITUNNEL_IMAGE_SIZE", "1024x1024")
     image_quality: str = _env("AITUNNEL_IMAGE_QUALITY", "auto")
     image_output_format: str = _env("AITUNNEL_IMAGE_FORMAT", "png")

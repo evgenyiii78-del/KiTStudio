@@ -79,13 +79,13 @@ async def main() -> None:
         bot_username = (me.username or "").lower()
         dp["bot_username"] = bot_username
 
-        logging.info("CakeHub AI Bot 3.4 started as @%s", me.username)
+        logging.info("CakeHub AI Bot 3.4.2 started as @%s", me.username)
         logging.info("Telegram token source: %s", token_source)
         logging.info("AITunnel API key: loaded")
         logging.info(
-            "Chat model: %s | Vision model: %s | Image model: %s",
-            settings.chat_model,
-            settings.vision_model,
+            "Chat model: %s | Vision model: %s | Image model EFFECTIVE: %s",
+            settings.chat_model or "<empty>",
+            settings.vision_model or "<empty>",
             settings.image_model,
         )
         logging.info("Database: %s", settings.database_path)

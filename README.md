@@ -1,4 +1,4 @@
-# CakeHub AI Bot 3.4.1
+# CakeHub AI Bot 3.4.2
 
 Telegram AI-бот на **aiogram 3**. Все AI-функции работают через **AITunnel**.
 Версия подготовлена для обычного Python-хостинга и **Bothost**; Railway-конфигурации в проекте нет.
@@ -30,7 +30,6 @@ Telegram AI-бот на **aiogram 3**. Все AI-функции работают
 .
 ├── main.py
 ├── requirements.txt
-├── pyproject.toml
 ├── .env.example
 ├── app/
 │   ├── agents.py
@@ -68,10 +67,10 @@ python main.py
 3. Главный файл: `main.py`.
 4. Версия Python: 3.11, 3.12 или 3.13.
 5. Добавьте переменные окружения из `.env.example` минимум:
-   - `TELEGRAM_BOT_TOKEN`
+   - `BOT_TOKEN` или `TELEGRAM_BOT_TOKEN`
    - `AITUNNEL_API_KEY`
-6. Оставьте `DATABASE_PATH=data/cakehub.sqlite3` — при рабочем каталоге `/app` база будет храниться в `/app/data`.
-7. Запустите/перезапустите бота и проверьте лог `CakeHub AI Bot 3.4.1 started as ...`.
+6. Используйте `DATABASE_PATH=/app/data/cakehub.sqlite3` для постоянного хранения базы на Bothost.
+7. После запуска проверьте лог `CakeHub AI Bot 3.4.2 started as ...`.
 
 `requirements.txt` лежит в корне, поэтому зависимости устанавливаются платформой при сборке.
 
@@ -86,7 +85,9 @@ AITUNNEL_VISION_MODEL=auto
 AITUNNEL_IMAGE_MODEL=gpt-image-2
 ```
 
-Если модель изображения недоступна на вашем тарифе, поменяйте `AITUNNEL_IMAGE_MODEL` на ID доступной модели AITunnel.
+Для image generation значение `AITUNNEL_IMAGE_MODEL=auto` не отправляется в AITunnel: пустое значение и `auto` принудительно нормализуются в `gpt-image-2`.
+Если AITunnel вернёт 403 со списком разрешённых image-моделей, бот автоматически повторит запрос с разрешённой моделью.
+После деплоя в runtime-логе ищите строку `Image model EFFECTIVE: gpt-image-2`.
 
 ## Группы
 
@@ -116,9 +117,3 @@ SMOKE TEST: PASS
 ## Безопасность
 
 Не добавляйте `.env` в Git. В репозитории должен находиться только `.env.example` без настоящих токенов.
-
-
-## 3.4.1
-
-- Для генерации изображений используется `gpt-image-2` вместо виртуального `auto`.
-- Если AITunnel вернёт 403 со списком разрешённых image-моделей, бот автоматически повторит запрос с разрешённой моделью.
