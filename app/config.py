@@ -15,7 +15,6 @@ def _env(name: str, default: str = "") -> str:
 
 
 def _clean_token(value: str) -> str:
-    """Normalize a Telegram token accidentally pasted with quotes or `bot` prefix."""
     token = (value or "").strip().strip('"').strip("'").strip()
     if token.lower().startswith("bot") and ":" in token:
         token = token[3:].strip()
@@ -23,7 +22,6 @@ def _clean_token(value: str) -> str:
 
 
 def telegram_token_candidates() -> list[tuple[str, str]]:
-    """Return unique Telegram token candidates in Bothost-friendly priority order."""
     result: list[tuple[str, str]] = []
     seen: set[str] = set()
     for source in ("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
@@ -41,34 +39,20 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _image_model() -> str:
-    """Return a concrete AITunnel image model; image generation must never use `auto`."""
-    model = _env("AITUNNEL_IMAGE_MODEL", "gpt-image-2").strip()
-    if not model or model.lower() == "auto":
-        return "gpt-image-2"
-    return model
-
-
 @dataclass(frozen=True)
 class Settings:
-    # Bothost commonly exposes BOT_TOKEN. TELEGRAM_BOT_TOKEN remains a fallback.
     telegram_bot_token: str = _clean_token(_env("BOT_TOKEN")) or _clean_token(_env("TELEGRAM_BOT_TOKEN"))
     aitunnel_api_key: str = _env("AITUNNEL_API_KEY")
     aitunnel_base_url: str = _env("AITUNNEL_BASE_URL", "https://api.aitunnel.ru/v1").rstrip("/")
 
-    chat_model: str = _env("AITUNNEL_CHAT_MODEL", "auto")
-    vision_model: str = _env("AITUNNEL_VISION_MODEL", "auto")
-    image_model: str = _image_model()
+    image_model: str = "gpt-image-2"
     image_size: str = _env("AITUNNEL_IMAGE_SIZE", "1024x1024")
     image_quality: str = _env("AITUNNEL_IMAGE_QUALITY", "auto")
     image_output_format: str = _env("AITUNNEL_IMAGE_FORMAT", "png")
 
-    database_path: str = _env("DATABASE_PATH", "/app/data/cakehub.sqlite3")
-    history_limit: int = _env_int("HISTORY_LIMIT", 16)
-    max_output_tokens: int = _env_int("MAX_OUTPUT_TOKENS", 2500)
+    database_path: str = _env("DATABASE_PATH", "/app/data/kitstudio.sqlite3")
     ai_timeout_seconds: int = _env_int("AI_TIMEOUT_SECONDS", 180)
     log_level: str = _env("LOG_LEVEL", "INFO")
-    group_trigger_name: str = _env("GROUP_TRIGGER_NAME", "кейкхаб").lower()
 
     def validate(self) -> None:
         missing: list[str] = []
@@ -78,8 +62,6 @@ class Settings:
             missing.append("AITUNNEL_API_KEY")
         if missing:
             raise RuntimeError("Не заданы обязательные переменные: " + ", ".join(missing))
-        if self.history_limit < 2:
-            raise RuntimeError("HISTORY_LIMIT должен быть >= 2")
 
     def ensure_directories(self) -> None:
         Path(self.database_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
