@@ -30,6 +30,7 @@ def _env_int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str = _clean_token(_env("BOT_TOKEN")) or _clean_token(_env("TELEGRAM_BOT_TOKEN"))
+    admin_id: int = _env_int("ADMIN_ID", 413810754)
     aitunnel_api_key: str = _env("AITUNNEL_API_KEY")
     aitunnel_base_url: str = _env("AITUNNEL_BASE_URL", "https://api.aitunnel.ru/v1").rstrip("/")
     image_model: str = "gpt-image-2"
