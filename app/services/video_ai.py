@@ -23,8 +23,10 @@ class VideoAIService:
         self.headers = {"Authorization": f"Bearer {settings.aitunnel_api_key}"}
 
     async def create(self, source_video: Path, references: list[Path], prompt: str,
-                     model: str = "seedance-2.5", duration: int = 5,
+                     model: str = "hailuo-3", duration: int = 5,
                      aspect_ratio: str = "9:16") -> dict:
+        # AITUNNEL accepts data URLs and uploads them to temporary public HTTPS
+        # storage before forwarding to providers that require a public URL.
         payload = {
             "model": model,
             "prompt": prompt,
@@ -34,9 +36,18 @@ class VideoAIService:
                 *[{"type": "image_url", "image_url": {"url": _data_url(p)}} for p in references],
             ],
         }
+
         if model == "seedance-2.5":
             payload["resolution"] = "720p"
             payload["aspect_ratio"] = aspect_ratio
+        elif model == "flux-3-video":
+            payload["resolution"] = "720p"
+            payload["aspect_ratio"] = aspect_ratio
+        elif model == "aleph-2":
+            payload["aspect_ratio"] = aspect_ratio
+        # Hailuo 3 currently advertises 2K only; leave resolution/size to
+        # AITUNNEL/provider defaults so we do not send an invalid size.
+
         async with httpx.AsyncClient(timeout=240) as client:
             r = await client.post(f"{self.base_url}/videos", headers=self.headers, json=payload)
             r.raise_for_status()
