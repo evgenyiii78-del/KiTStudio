@@ -9,7 +9,7 @@ import httpx
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from app.keyboards import BTN_VIDEO, main_menu
 
@@ -17,20 +17,37 @@ router = Router(name="video")
 WORK = Path("data/video_work")
 MIN_SEEDANCE_PIXELS = 407696
 
-SYSTEM_RULES = """IMPORTANT EDITING RULES:
-Use the SOURCE VIDEO as the temporal and compositional base. Do not recreate the scene from scratch.
+VIDEO_MODELS = {
+    "🧪 Hailuo 3": {"id": "hailuo-3", "name": "Hailuo 3", "min": 5, "max": 15},
+    "🧪 Flux 3 Video": {"id": "flux-3-video", "name": "Flux 3 Video", "min": 5, "max": 20},
+    "🧪 Aleph 2": {"id": "aleph-2", "name": "Aleph 2", "min": 2, "max": 10},
+}
+
+SYSTEM_RULES = """STRICT SOURCE-LOCKED VIDEO EDIT.
+Use the SOURCE VIDEO as the exact temporal and compositional base. Do not recreate, retime or reinterpret the scene.
 The user's text prompt below is the primary editing instruction.
-Reference images are supplied after the source video and must be used in the same order in which the user uploaded them.
-Preserve source timing, camera motion, cuts, framing, scene geometry, background, lighting, shadows, atmosphere, props and unrelated content unless the user explicitly asks to change them.
-Preserve poses, gestures, expressions, head motion and gaze of replaced people unless the user explicitly asks otherwise.
-Maintain photorealism and strong temporal consistency. Avoid identity drift, morphing, duplicate faces, extra people, extra limbs, geometry flicker and unintended camera changes.
+Reference images are supplied after the source video and must be used in this order: REFERENCE 1 = woman, REFERENCE 2 = man, REFERENCE 3 = vehicle.
+Preserve source timing, camera motion, cuts, framing, perspective, scene geometry, background, lighting, shadows, atmosphere, props and unrelated content.
+Preserve the exact position, motion trajectory, orientation and visibility of every existing subject/object unless the user explicitly requests its appearance to change.
+For replaced people, preserve source pose, gestures, expression, head motion and gaze frame by frame while transferring only identity/appearance from the corresponding reference.
+Preserve recognizable facial identity from the reference. Do not blend with the original identity, do not morph, do not create look-alikes, duplicate faces, extra people or extra limbs.
+For a replaced vehicle, change appearance only; preserve its exact source position, scale, orientation, trajectory and timing frame by frame.
+SOURCE VIDEO determines WHERE, WHEN and HOW everything happens. REFERENCES determine only WHAT the requested subjects LOOK LIKE.
+Maintain photorealism and strong temporal consistency. No unintended camera or timing changes.
 """
 
 class VideoFlow(StatesGroup):
-    prompt = State(); source = State(); woman = State(); man = State(); car = State(); ready = State()
+    model = State(); prompt = State(); source = State(); woman = State(); man = State(); car = State(); ready = State()
 
 def _dir(uid: int) -> Path:
     p=WORK/str(uid); p.mkdir(parents=True,exist_ok=True); return p
+
+def _model_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=label)] for label in VIDEO_MODELS],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
 
 def _probe_dimensions(path: Path) -> tuple[int,int]:
     try:
@@ -46,9 +63,7 @@ def _ratio(w:int,h:int)->str:
 def _needs_upscale(w:int,h:int)->bool:
     return bool(w and h and w*h < MIN_SEEDANCE_PIXELS)
 
-def _upscale_for_seedance(src:Path,dst:Path,w:int,h:int)->tuple[int,int]:
-    # Provider requires >=407696 pixels. 720x1280 is safe for portrait,
-    # 1280x720 for landscape and keeps the original aspect ratio via scale+pad.
+def _upscale_source(src:Path,dst:Path,w:int,h:int)->tuple[int,int]:
     tw,th=(720,1280) if h>=w else (1280,720)
     vf=f"scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:black"
     subprocess.run(["ffmpeg","-y","-i",str(src),"-vf",vf,"-c:v","libx264","-preset","veryfast","-crf","18","-c:a","aac","-b:a","192k","-movflags","+faststart",str(dst)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
@@ -61,8 +76,21 @@ async def _save(bot,file_id:str,target:Path):
 async def begin(message:Message,state:FSMContext)->None:
     if not message.from_user:return
     d=_dir(message.from_user.id); shutil.rmtree(d,ignore_errors=True); d.mkdir(parents=True)
-    await state.clear(); await state.set_state(VideoFlow.prompt)
-    await message.answer("🎬 <b>Видео AI • Seedance 2.5</b>\n\n1/5 Пришлите <b>текстовый промпт</b>: что изменить в видео.\nПосле него бот запросит видео и три референса.")
+    await state.clear(); await state.set_state(VideoFlow.model)
+    await message.answer(
+        "🎬 <b>Видео AI • тест моделей</b>\n\nВыберите модель для этого запуска:\n"
+        "• Hailuo 3 — 5–15 сек.\n• Flux 3 Video — 5–20 сек.\n• Aleph 2 — 2–10 сек.",
+        reply_markup=_model_keyboard(),
+    )
+
+@router.message(VideoFlow.model, F.text)
+async def choose_model(message:Message,state:FSMContext)->None:
+    cfg=VIDEO_MODELS.get((message.text or "").strip())
+    if not cfg:
+        await message.answer("Выберите модель кнопкой ниже.",reply_markup=_model_keyboard()); return
+    await state.update_data(video_model=cfg["id"],video_model_name=cfg["name"],model_min=cfg["min"],model_max=cfg["max"])
+    await state.set_state(VideoFlow.prompt)
+    await message.answer(f"Выбрана <b>{cfg['name']}</b>.\n\n1/5 Пришлите <b>текстовый промпт</b>: что изменить в видео.")
 
 @router.message(VideoFlow.prompt,F.text)
 async def prompt(message:Message,state:FSMContext)->None:
@@ -77,20 +105,22 @@ async def source(message:Message,state:FSMContext,bot)->None:
     await _save(bot,message.video.file_id,original)
     dur=float(message.video.duration or 5); w=int(message.video.width or 0); h=int(message.video.height or 0)
     if not w or not h: w,h=_probe_dimensions(original)
-    source_path=original; upscaled=False
+    data=await state.get_data(); model=data.get("video_model","hailuo-3")
+    source_path=original; prepared=False
+    # Keep the old safe 720p preparation for small source clips. It also avoids
+    # provider-side minimum-pixel errors seen during earlier tests.
     if _needs_upscale(w,h):
-        prepared=d/"source.mp4"
+        target=d/"source.mp4"
         try:
-            w,h=_upscale_for_seedance(original,prepared,w,h); source_path=prepared; upscaled=True
-        except Exception as exc:
-            await message.answer("❌ Видео слишком маленького разрешения для Seedance 2.5, а FFmpeg на сервере не смог подготовить 720p.\nПришлите видео минимум примерно 720p.")
-            return
-    elif original.name!="source.mp4":
-        prepared=d/"source.mp4"; shutil.copy2(original,prepared); source_path=prepared
-    await state.update_data(width=w,height=h,duration=dur,upscaled=upscaled)
+            w,h=_upscale_source(original,target,w,h); source_path=target; prepared=True
+        except Exception:
+            await message.answer("❌ FFmpeg не смог подготовить исходное видео. Пришлите ролик примерно 720p или выше."); return
+    else:
+        target=d/"source.mp4"; shutil.copy2(original,target); source_path=target
+    await state.update_data(width=w,height=h,duration=dur,prepared=prepared)
     await state.set_state(VideoFlow.woman)
-    note="\n🔧 Исходник автоматически подготовлен до 720p для требований Seedance." if upscaled else ""
-    await message.answer(f"Видео принято: {w}×{h}, <b>{dur:.1f} сек.</b>{note}\n\n3/5 Пришлите <b>первое фото</b> — женщина (внешность + одежда).")
+    note="\n🔧 Низкое разрешение автоматически подготовлено до 720p." if prepared else ""
+    await message.answer(f"Видео принято: {w}×{h}, <b>{dur:.1f} сек.</b>{note}\nМодель: <b>{data.get('video_model_name',model)}</b>\n\n3/5 Пришлите <b>первое фото</b> — женщина (внешность + одежда).")
 
 @router.message(VideoFlow.woman,F.photo)
 async def woman(message:Message,state:FSMContext,bot)->None:
@@ -103,31 +133,36 @@ async def man(message:Message,state:FSMContext,bot)->None:
 @router.message(VideoFlow.car,F.photo)
 async def car(message:Message,state:FSMContext,bot)->None:
     await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"car.jpg"); await state.set_state(VideoFlow.ready); data=await state.get_data()
-    await message.answer("✅ Все материалы получены.\n\n"+f"<b>Промпт:</b>\n{data.get('user_prompt','')}\n\n<b>Видео:</b> {float(data.get('duration',5)):.1f} сек., {data.get('width')}×{data.get('height')}\n<b>Референсы:</b> женщина → мужчина → автомобиль\n<b>Модель:</b> Seedance 2.5 / 720p\n\nОтправьте <b>ЗАПУСК</b>.")
+    max_d=int(data.get("model_max",15)); original_d=float(data.get("duration",5)); send_d=max(int(data.get("model_min",5)),min(max_d,round(original_d)))
+    trim_note=f"\n⚠️ Для этой модели будет отправлено максимум <b>{max_d} сек.</b>" if original_d>max_d else ""
+    await message.answer("✅ Все материалы получены.\n\n"+f"<b>Промпт:</b>\n{data.get('user_prompt','')}\n\n<b>Видео:</b> {original_d:.1f} сек., {data.get('width')}×{data.get('height')}\n<b>Референсы:</b> женщина → мужчина → автомобиль\n<b>Модель:</b> {data.get('video_model_name','Hailuo 3')}\n<b>Длительность запроса:</b> {send_d} сек.{trim_note}\n\nОтправьте <b>ЗАПУСК</b>.")
 
 @router.message(VideoFlow.ready,F.text.casefold()=="запуск")
 async def run(message:Message,state:FSMContext,video_ai)->None:
-    d=_dir(message.from_user.id); data=await state.get_data(); duration=max(4,min(30,round(float(data.get("duration",5))))); ratio=_ratio(int(data.get("width",0)),int(data.get("height",0)))
+    d=_dir(message.from_user.id); data=await state.get_data()
+    model=str(data.get("video_model","hailuo-3")); model_name=str(data.get("video_model_name","Hailuo 3"))
+    min_d=int(data.get("model_min",5)); max_d=int(data.get("model_max",15)); duration=max(min_d,min(max_d,round(float(data.get("duration",5)))))
+    ratio=_ratio(int(data.get("width",0)),int(data.get("height",0)))
     final_prompt=f"{SYSTEM_RULES}\nUSER EDIT INSTRUCTION:\n{str(data.get('user_prompt','')).strip()}"
-    status=await message.answer(f"⏳ Seedance 2.5: отправляю задачу…\n{duration} сек., {ratio}, 720p")
+    status=await message.answer(f"⏳ {model_name}: отправляю задачу…\n{duration} сек., {ratio}")
     try:
-        job=await video_ai.create(d/"source.mp4",[d/"woman.jpg",d/"man.jpg",d/"car.jpg"],final_prompt,duration=duration,aspect_ratio=ratio)
+        job=await video_ai.create(d/"source.mp4",[d/"woman.jpg",d/"man.jpg",d/"car.jpg"],final_prompt,model=model,duration=duration,aspect_ratio=ratio)
         last=None
         async def progress(s,payload):
             nonlocal last
             if s!=last:
                 last=s
-                try: await status.edit_text(f"⏳ Seedance 2.5: {s}")
+                try: await status.edit_text(f"⏳ {model_name}: {s}")
                 except Exception: pass
         job=await video_ai.wait(job,progress)
         if job.get("status")!="completed": raise RuntimeError(job.get("error") or str(job))
-        out=await video_ai.download(job,d/"result.mp4"); cost=(job.get("usage") or {}).get("cost_rub"); caption="✅ Seedance 2.5 готово."+(f"\nСтоимость: {cost} ₽" if cost is not None else "")
+        out=await video_ai.download(job,d/"result.mp4"); cost=(job.get("usage") or {}).get("cost_rub")
+        caption=f"✅ {model_name} готово."+(f"\nСтоимость: {cost} ₽" if cost is not None else "")
         await message.answer_video(out,caption=caption,reply_markup=main_menu()); await state.clear()
     except httpx.HTTPStatusError as exc:
-        code=exc.response.status_code; body=exc.response.text[:1800]
+        code=exc.response.status_code; body=exc.response.text[:2200]
         if code==402: text="💳 <b>Недостаточно средств на балансе AITUNNEL.</b>\nМатериалы сохранены. После пополнения снова отправьте <b>ЗАПУСК</b>."
-        elif code==400 and "pixel count" in body: text="📐 <b>Seedance отклонил разрешение исходного видео.</b>\nНачните новую генерацию: бот автоматически подготовит низкое разрешение до 720p перед отправкой."
-        else: text=f"❌ AITUNNEL HTTP {code}:\n<code>{body}</code>"
+        else: text=f"❌ {model_name} / AITUNNEL HTTP {code}:\n<code>{body}</code>"
         await message.answer(text,reply_markup=main_menu())
     except Exception as exc:
-        await message.answer(f"❌ Ошибка Video AI:\n<code>{str(exc)[:3000]}</code>",reply_markup=main_menu())
+        await message.answer(f"❌ Ошибка {model_name}:\n<code>{str(exc)[:3000]}</code>",reply_markup=main_menu())
