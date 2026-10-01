@@ -15,7 +15,6 @@ from app.keyboards import BTN_VIDEO, main_menu
 
 router = Router(name="video")
 WORK = Path("data/video_work")
-MIN_SEEDANCE_PIXELS = 407696
 
 VIDEO_MODELS = {
     "🧪 Hailuo 3": {"id": "hailuo-3", "name": "Hailuo 3", "min": 5, "max": 15},
@@ -60,15 +59,6 @@ def _ratio(w:int,h:int)->str:
     r=w/h; choices={"9:16":9/16,"16:9":16/9,"1:1":1,"3:4":3/4,"4:3":4/3,"9:21":9/21,"21:9":21/9}
     return min(choices,key=lambda k:abs(choices[k]-r))
 
-def _needs_upscale(w:int,h:int)->bool:
-    return bool(w and h and w*h < MIN_SEEDANCE_PIXELS)
-
-def _upscale_source(src:Path,dst:Path,w:int,h:int)->tuple[int,int]:
-    tw,th=(720,1280) if h>=w else (1280,720)
-    vf=f"scale={tw}:{th}:force_original_aspect_ratio=decrease,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:black"
-    subprocess.run(["ffmpeg","-y","-i",str(src),"-vf",vf,"-c:v","libx264","-preset","veryfast","-crf","18","-c:a","aac","-b:a","192k","-movflags","+faststart",str(dst)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-    return tw,th
-
 async def _save(bot,file_id:str,target:Path):
     f=await bot.get_file(file_id); await bot.download_file(f.file_path,destination=target)
 
@@ -101,26 +91,34 @@ async def prompt(message:Message,state:FSMContext)->None:
 
 @router.message(VideoFlow.source,F.video)
 async def source(message:Message,state:FSMContext,bot)->None:
-    d=_dir(message.from_user.id); original=d/"source_original.mp4"
-    await _save(bot,message.video.file_id,original)
-    dur=float(message.video.duration or 5); w=int(message.video.width or 0); h=int(message.video.height or 0)
-    if not w or not h: w,h=_probe_dimensions(original)
-    data=await state.get_data(); model=data.get("video_model","hailuo-3")
-    source_path=original; prepared=False
-    # Keep the old safe 720p preparation for small source clips. It also avoids
-    # provider-side minimum-pixel errors seen during earlier tests.
-    if _needs_upscale(w,h):
-        target=d/"source.mp4"
-        try:
-            w,h=_upscale_source(original,target,w,h); source_path=target; prepared=True
-        except Exception:
-            await message.answer("❌ FFmpeg не смог подготовить исходное видео. Пришлите ролик примерно 720p или выше."); return
-    else:
-        target=d/"source.mp4"; shutil.copy2(original,target); source_path=target
-    await state.update_data(width=w,height=h,duration=dur,prepared=prepared)
+    d=_dir(message.from_user.id)
+    target=d/"source.mp4"
+    try:
+        await _save(bot,message.video.file_id,target)
+    except Exception as exc:
+        await message.answer(f"❌ Не удалось скачать видео из Telegram:\n<code>{str(exc)[:1200]}</code>")
+        return
+
+    dur=float(message.video.duration or 5)
+    w=int(message.video.width or 0)
+    h=int(message.video.height or 0)
+    if not w or not h:
+        w,h=_probe_dimensions(target)
+
+    # Hailuo / Flux / Aleph receive the original Telegram MP4 unchanged.
+    # Do NOT apply the old Seedance-specific 407696-pixel check here and do
+    # NOT transcode with FFmpeg. Provider-specific validation belongs to the
+    # provider adapter, not to the common upload flow.
+    data=await state.get_data()
+    model=data.get("video_model","hailuo-3")
+    await state.update_data(width=w,height=h,duration=dur,prepared=False)
     await state.set_state(VideoFlow.woman)
-    note="\n🔧 Низкое разрешение автоматически подготовлено до 720p." if prepared else ""
-    await message.answer(f"Видео принято: {w}×{h}, <b>{dur:.1f} сек.</b>{note}\nМодель: <b>{data.get('video_model_name',model)}</b>\n\n3/5 Пришлите <b>первое фото</b> — женщина (внешность + одежда).")
+    dims=f"{w}×{h}" if w and h else "размер не определён"
+    await message.answer(
+        f"Видео принято без перекодирования: <b>{dims}</b>, <b>{dur:.1f} сек.</b>\n"
+        f"Модель: <b>{data.get('video_model_name',model)}</b>\n\n"
+        "3/5 Пришлите <b>первое фото</b> — женщина (внешность + одежда)."
+    )
 
 @router.message(VideoFlow.woman,F.photo)
 async def woman(message:Message,state:FSMContext,bot)->None:
