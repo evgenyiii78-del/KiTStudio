@@ -8,3 +8,4 @@ __pycache__/
 .vscode/
 data/*.sqlite3
 data/*.sqlite3-*
+data/video_work/
