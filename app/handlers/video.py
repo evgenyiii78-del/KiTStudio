@@ -15,8 +15,11 @@ from app.keyboards import BTN_VIDEO, main_menu
 
 router = Router(name="video")
 WORK = Path("data/video_work")
+SEEDANCE_MIN_PIXELS = 407696
+SEEDANCE_MAX_INPUT_SECONDS = 15.2
 
 VIDEO_MODELS = {
+    "💸 Seedance 2.0 Mini": {"id": "seedance-2.0-mini", "name": "Seedance 2.0 Mini", "min": 4, "max": 15},
     "🧪 Hailuo 3": {"id": "hailuo-3", "name": "Hailuo 3", "min": 5, "max": 15},
     "🧪 Flux 3 Video": {"id": "flux-3-video", "name": "Flux 3 Video", "min": 5, "max": 20},
     "🧪 Aleph 2": {"id": "aleph-2", "name": "Aleph 2", "min": 2, "max": 10},
@@ -68,12 +71,15 @@ async def begin(message:Message,state:FSMContext)->None:
     d=_dir(message.from_user.id); shutil.rmtree(d,ignore_errors=True); d.mkdir(parents=True)
     await state.clear(); await state.set_state(VideoFlow.model)
     await message.answer(
-        "🎬 <b>Видео AI • тест моделей</b>\n\nВыберите модель для этого запуска:\n"
-        "• Hailuo 3 — 5–15 сек.\n• Flux 3 Video — 5–20 сек.\n• Aleph 2 — 2–10 сек.",
+        "🎬 <b>Видео AI • тест моделей</b>\n\nВыберите модель:\n"
+        "• Seedance 2.0 Mini — дешёвый V2V, 4–15 сек., 480p\n"
+        "• Hailuo 3 — 5–15 сек.\n"
+        "• Flux 3 Video — 5–20 сек.\n"
+        "• Aleph 2 — 2–10 сек.",
         reply_markup=_model_keyboard(),
     )
 
-@router.message(VideoFlow.model, F.text)
+@router.message(VideoFlow.model,F.text)
 async def choose_model(message:Message,state:FSMContext)->None:
     cfg=VIDEO_MODELS.get((message.text or "").strip())
     if not cfg:
@@ -85,64 +91,85 @@ async def choose_model(message:Message,state:FSMContext)->None:
 @router.message(VideoFlow.prompt,F.text)
 async def prompt(message:Message,state:FSMContext)->None:
     text=(message.text or "").strip()
-    if len(text)<5: await message.answer("Промпт слишком короткий."); return
+    if len(text)<5:
+        await message.answer("Промпт слишком короткий."); return
     await state.update_data(user_prompt=text); await state.set_state(VideoFlow.source)
-    await message.answer("2/5 Теперь пришлите <b>исходное видео</b> MP4.")
+    await message.answer("2/5 Теперь пришлите <b>исходное видео</b> MP4/MOV.")
 
 @router.message(VideoFlow.source,F.video)
 async def source(message:Message,state:FSMContext,bot)->None:
-    d=_dir(message.from_user.id)
-    target=d/"source.mp4"
+    d=_dir(message.from_user.id); target=d/"source.mp4"
     try:
         await _save(bot,message.video.file_id,target)
     except Exception as exc:
-        await message.answer(f"❌ Не удалось скачать видео из Telegram:\n<code>{str(exc)[:1200]}</code>")
-        return
+        await message.answer(f"❌ Не удалось скачать видео из Telegram:\n<code>{str(exc)[:1200]}</code>"); return
 
     dur=float(message.video.duration or 5)
-    w=int(message.video.width or 0)
-    h=int(message.video.height or 0)
-    if not w or not h:
-        w,h=_probe_dimensions(target)
+    w=int(message.video.width or 0); h=int(message.video.height or 0)
+    if not w or not h: w,h=_probe_dimensions(target)
+    data=await state.get_data(); model=str(data.get("video_model","seedance-2.0-mini"))
 
-    # Hailuo / Flux / Aleph receive the original Telegram MP4 unchanged.
-    # Do NOT apply the old Seedance-specific 407696-pixel check here and do
-    # NOT transcode with FFmpeg. Provider-specific validation belongs to the
-    # provider adapter, not to the common upload flow.
-    data=await state.get_data()
-    model=data.get("video_model","hailuo-3")
+    if model=="seedance-2.0-mini":
+        pixels=w*h if w and h else 0
+        if pixels and pixels<SEEDANCE_MIN_PIXELS:
+            await message.answer(
+                "❌ <b>Seedance 2.0 Mini отклонила бы этот исходник по разрешению.</b>\n\n"
+                f"Получено: <b>{w}×{h}</b> = {pixels:,} px\n"
+                f"Минимум: <b>{SEEDANCE_MIN_PIXELS:,} px</b>\n\n"
+                "Пришлите подготовленную версию, например <b>472×864</b> или выше, без изменения кадрирования."
+            ); return
+        if dur>SEEDANCE_MAX_INPUT_SECONDS:
+            await message.answer(
+                "❌ <b>Seedance 2.0 Mini принимает входное видео максимум 15.2 сек.</b>\n\n"
+                f"Сейчас: <b>{dur:.1f} сек.</b>\n"
+                "Обрежьте исходник до 15 сек. или меньше и пришлите снова."
+            ); return
+
     await state.update_data(width=w,height=h,duration=dur,prepared=False)
     await state.set_state(VideoFlow.woman)
     dims=f"{w}×{h}" if w and h else "размер не определён"
+    extra="\n✅ Проверка Seedance: разрешение и длительность входа проходят." if model=="seedance-2.0-mini" else ""
     await message.answer(
-        f"Видео принято без перекодирования: <b>{dims}</b>, <b>{dur:.1f} сек.</b>\n"
-        f"Модель: <b>{data.get('video_model_name',model)}</b>\n\n"
+        f"Видео принято: <b>{dims}</b>, <b>{dur:.1f} сек.</b>\n"
+        f"Модель: <b>{data.get('video_model_name',model)}</b>{extra}\n\n"
         "3/5 Пришлите <b>первое фото</b> — женщина (внешность + одежда)."
     )
 
 @router.message(VideoFlow.woman,F.photo)
 async def woman(message:Message,state:FSMContext,bot)->None:
-    await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"woman.jpg"); await state.set_state(VideoFlow.man); await message.answer("4/5 Пришлите <b>второе фото</b> — мужчина.")
+    await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"woman.jpg")
+    await state.set_state(VideoFlow.man); await message.answer("4/5 Пришлите <b>второе фото</b> — мужчина.")
 
 @router.message(VideoFlow.man,F.photo)
 async def man(message:Message,state:FSMContext,bot)->None:
-    await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"man.jpg"); await state.set_state(VideoFlow.car); await message.answer("5/5 Пришлите <b>третье фото</b> — автомобиль.")
+    await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"man.jpg")
+    await state.set_state(VideoFlow.car); await message.answer("5/5 Пришлите <b>третье фото</b> — автомобиль.")
 
 @router.message(VideoFlow.car,F.photo)
 async def car(message:Message,state:FSMContext,bot)->None:
-    await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"car.jpg"); await state.set_state(VideoFlow.ready); data=await state.get_data()
-    max_d=int(data.get("model_max",15)); original_d=float(data.get("duration",5)); send_d=max(int(data.get("model_min",5)),min(max_d,round(original_d)))
-    trim_note=f"\n⚠️ Для этой модели будет отправлено максимум <b>{max_d} сек.</b>" if original_d>max_d else ""
-    await message.answer("✅ Все материалы получены.\n\n"+f"<b>Промпт:</b>\n{data.get('user_prompt','')}\n\n<b>Видео:</b> {original_d:.1f} сек., {data.get('width')}×{data.get('height')}\n<b>Референсы:</b> женщина → мужчина → автомобиль\n<b>Модель:</b> {data.get('video_model_name','Hailuo 3')}\n<b>Длительность запроса:</b> {send_d} сек.{trim_note}\n\nОтправьте <b>ЗАПУСК</b>.")
+    await _save(bot,message.photo[-1].file_id,_dir(message.from_user.id)/"car.jpg")
+    await state.set_state(VideoFlow.ready); data=await state.get_data()
+    max_d=int(data.get("model_max",15)); original_d=float(data.get("duration",5)); send_d=max(int(data.get("model_min",4)),min(max_d,round(original_d)))
+    trim_note=f"\n⚠️ Выход будет ограничен <b>{max_d} сек.</b>" if original_d>max_d else ""
+    await message.answer(
+        "✅ Все материалы получены.\n\n"
+        f"<b>Промпт:</b>\n{data.get('user_prompt','')}\n\n"
+        f"<b>Видео:</b> {original_d:.1f} сек., {data.get('width')}×{data.get('height')}\n"
+        "<b>Референсы:</b> женщина → мужчина → автомобиль\n"
+        f"<b>Модель:</b> {data.get('video_model_name','Seedance 2.0 Mini')}\n"
+        f"<b>Длительность результата:</b> {send_d} сек.{trim_note}\n\n"
+        "Отправьте <b>ЗАПУСК</b>."
+    )
 
 @router.message(VideoFlow.ready,F.text.casefold()=="запуск")
 async def run(message:Message,state:FSMContext,video_ai)->None:
     d=_dir(message.from_user.id); data=await state.get_data()
-    model=str(data.get("video_model","hailuo-3")); model_name=str(data.get("video_model_name","Hailuo 3"))
-    min_d=int(data.get("model_min",5)); max_d=int(data.get("model_max",15)); duration=max(min_d,min(max_d,round(float(data.get("duration",5)))))
+    model=str(data.get("video_model","seedance-2.0-mini")); model_name=str(data.get("video_model_name","Seedance 2.0 Mini"))
+    min_d=int(data.get("model_min",4)); max_d=int(data.get("model_max",15)); duration=max(min_d,min(max_d,round(float(data.get("duration",5)))))
     ratio=_ratio(int(data.get("width",0)),int(data.get("height",0)))
     final_prompt=f"{SYSTEM_RULES}\nUSER EDIT INSTRUCTION:\n{str(data.get('user_prompt','')).strip()}"
-    status=await message.answer(f"⏳ {model_name}: отправляю задачу…\n{duration} сек., {ratio}")
+    resolution="480p" if model=="seedance-2.0-mini" else ""
+    status=await message.answer(f"⏳ {model_name}: отправляю задачу…\n{duration} сек., {ratio}"+(f", {resolution}" if resolution else ""))
     try:
         job=await video_ai.create(d/"source.mp4",[d/"woman.jpg",d/"man.jpg",d/"car.jpg"],final_prompt,model=model,duration=duration,aspect_ratio=ratio)
         last=None
@@ -159,8 +186,10 @@ async def run(message:Message,state:FSMContext,video_ai)->None:
         await message.answer_video(out,caption=caption,reply_markup=main_menu()); await state.clear()
     except httpx.HTTPStatusError as exc:
         code=exc.response.status_code; body=exc.response.text[:2200]
-        if code==402: text="💳 <b>Недостаточно средств на балансе AITUNNEL.</b>\nМатериалы сохранены. После пополнения снова отправьте <b>ЗАПУСК</b>."
-        else: text=f"❌ {model_name} / AITUNNEL HTTP {code}:\n<code>{body}</code>"
+        if code==402:
+            text="💳 <b>Недостаточно средств на балансе AITUNNEL.</b>\nМатериалы сохранены. После пополнения снова отправьте <b>ЗАПУСК</b>."
+        else:
+            text=f"❌ {model_name} / AITUNNEL HTTP {code}:\n<code>{body}</code>"
         await message.answer(text,reply_markup=main_menu())
     except Exception as exc:
         await message.answer(f"❌ Ошибка {model_name}:\n<code>{str(exc)[:3000]}</code>",reply_markup=main_menu())
